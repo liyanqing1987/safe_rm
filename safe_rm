@@ -1,0 +1,367 @@
+#!/bin/env python3
+# -*- coding: utf-8 -*-
+################################
+# File Name   : safe_rm
+# Author      : liyanqing.1987
+# Created On  : 2024-04-21 21:28:47
+# Description : Safe "rm" script to replace linux "rm" command.
+# Version     : V1.0 (2024-07-08)
+################################
+import os
+import re
+import sys
+import copy
+import glob
+import json
+import socket
+import datetime
+import subprocess
+
+os.environ['PYTHONUNBUFFERED'] = '1'
+CWD = os.getcwd()
+HOSTNAME = socket.gethostname()
+CURRENT_DATE = datetime.datetime.now().strftime('%Y%m%d')
+CURRENT_TIME = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+USER = os.popen('whoami').read().strip()
+LOGIN_USER = os.popen('who am i').read().strip()
+
+if LOGIN_USER:
+    LOGIN_USER = re.sub(r' .*', '', LOGIN_USER)
+else:
+    LOGIN_USER = USER
+
+
+def debug_print(message, debug_level_list=[1, ]):
+    """
+    Print message based on the debug_level which is specified by environment variable "SAFE_RM_DEBUG".
+    [export SAFE_RM_DEBUG=1] : show warning message.
+    [export SAFE_RM_DEBUG=2] : show command.
+    [export SAFE_RM_DEBUG=3] : show configuration.
+    [export SAFE_RM_DEBUG=4] : pure debug mode, not really execute rm or mv operations.
+    """
+    debug_level_list.append(4)
+
+    if ('SAFE_RM_DEBUG' in os.environ) and re.match(r'^[1234]$', os.environ['SAFE_RM_DEBUG']) and (int(os.environ['SAFE_RM_DEBUG']) in debug_level_list):
+        print(message)
+
+
+def print_warning(message):
+    """
+    Print specified message with yellow color.
+    """
+    print('\033[1;33m' + str(message) + '\033[0m')
+
+
+class SafeRm():
+    """
+    Build safe "rm" class with protection/recycle/log/alarm machanism.
+    -----------
+    Protection: Protect path in self.protected_path_list from being deleted.
+    Recycle: Move the data to be deleted to the recycle bin.
+    Log: Save logs for all data deletion operations.
+    Alarm: Alarm for deletion operation to protected data.
+    -----------
+    """
+    def __init__(self):
+        # [Editable] self.protected_path_list : specify protected paths (absolute path), globally effective.
+        self.protected_path_list = [
+            '~',
+            '/',
+            '/bin',
+            '/boot',
+            '/dev',
+            '/etc',
+            '/home',
+            '/initrd',
+            '/lib',
+            '/lib64',
+            '/mnt',
+            '/opt',
+            '/proc',
+            '/root',
+            '/run',
+            '/sbin',
+            '/srv',
+            '/sys',
+            '/usr',
+            '/var']
+
+        self.protected_path_list = self.extend_list_with_config(self.protected_path_list, ['/etc/safe_rm.protected', str(os.environ['HOME']) + '/.config/safe_rm.protected'])
+        debug_print('[CONFIG] protected_path_list : ' + str(self.protected_path_list), debug_level_list=[3, ])
+
+        # [Editable] self.recycle_mode : enable recycle bin mechnism, move the data to be deleted to the recycle bin.
+        # [Editable] self.recycle_bin_dir : specify the recycle bin path (will create self.recycle_bin_dir/<USER> for current user).
+        # [Editable] self.recycle_path_list : specify recycle paths (absolute path), the following files will be moved to the recycle bin when they are deleted, globally effective.
+        self.recycle_mode = True
+        self.recycle_bin_dir = '/ic/software/cad_data/it/safe_rm/recycle_bin'
+        self.recycle_path_list = [
+            '~/.alias',
+            '~/.bash_history',
+            '~/.bashrc',
+            '~/.config',
+            '~/.ssh']
+
+        if self.recycle_mode:
+            if (not self.recycle_bin_dir) or (not os.path.exists(self.recycle_bin_dir)):
+                self.recycle_bin_dir = '/tmp/safe_rm/recycle_bin'
+                self.create_dir(self.recycle_bin_dir, permission=0o777)
+
+            self.recycle_path_list = self.extend_list_with_config(self.recycle_path_list, ['/etc/safe_rm.recycle', str(os.environ['HOME']) + '/.config/safe_rm.recycle'])
+
+        debug_print('[CONFIG] recycle_mode : ' + str(self.recycle_mode), debug_level_list=[3, ])
+        debug_print('[CONFIG] recycle_dir : ' + str(self.recycle_bin_dir), debug_level_list=[3, ])
+        debug_print('[CONFIG] recycle_path_list : ' + str(self.recycle_path_list), debug_level_list=[3, ])
+
+        # [Editable] self.log_mode : enable the behavior of saving logs.
+        # [Editable] self.log_ignore_user_list : specify a user list, will not save logs fro deletion operations of users in the list.
+        # [Editable] self.log_dir : where to save log file, make sure permission is "777".
+        self.log_mode = True
+        self.log_ignore_user_list = []
+        self.log_dir = '/ic/software/cad_data/it/safe_rm/log'
+
+        if self.log_mode:
+            if (not self.log_dir) or (not os.path.exists(self.log_dir)):
+                self.log_dir = '/tmp/safe_rm/log'
+                self.create_dir(self.log_dir, permission=0o777)
+
+        debug_print('[CONFIG] log_dir : ' + str(self.log_dir), debug_level_list=[3, ])
+
+        # [Editable] self.alarm_command : specify alarm command. ("<TITAL>", "<MESSAGE>" and "<USER>" are replaceable string.")
+        # [Editable] self.alarm_ignore_user_list : specify a user list, no alarms will be sent fro deletion operations of users in the list.
+        self.alarm_command = '/ic/software/cad_tools/bin/send_lark -T "Security Alarm: high risk deletion" -c "<MESSAGE>" -r liyanqing.1987'
+        self.alarm_ignore_user_list = []
+        debug_print('[CONFIG] alarm_command : ' + str(self.alarm_command), debug_level_list=[3, ])
+
+        # [Editable] self.system_rm : specify system rm path, will choice one from ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm'] by default.
+        self.system_rm = ''
+        self.get_system_rm()
+        debug_print('[CONFIG] system_rm : ' + str(self.system_rm), debug_level_list=[3, ])
+
+    def extend_list_with_config(self, path_list, config_file_list):
+        """
+        Extend path_list with config_file(s) on config_file_list.
+        """
+        # Parse config file(s).
+        for config_file in config_file_list:
+            if os.path.exists(config_file):
+                try:
+                    with open(config_file, 'r') as CF:
+                        for line in CF.readlines():
+                            if (not re.match(r'^\s*$', line)) and (not re.match(r'^\s*#.*$', line)):
+                                path_list.append(line)
+                except Exception:
+                    debug_print('[WARNING] *Warning*: Failed on opening config file ' + str(config_file) + ' for read.', debug_level_list=[1, 2, 3])
+
+        # Process for "~" and "*".
+        copy_path_list = copy.deepcopy(path_list)
+        tmp_path_list = []
+
+        for path_item in copy_path_list:
+            path_item = path_item.strip()
+
+            if re.match(r'^~.*$', path_item):
+                path_item = re.sub(r'~', os.environ['HOME'], path_item)
+
+            if re.search(r'\*', path_item):
+                tmp_path_list.extend(glob.glob(path_item))
+            else:
+                tmp_path_list.append(path_item)
+
+        tmp_path_list = sorted(list(set(tmp_path_list)))
+
+        # Get new_path_list with existing path_item.
+        new_path_list = []
+
+        for path_item in tmp_path_list:
+            if os.path.exists(path_item):
+                new_path_list.append(path_item)
+
+        return new_path_list
+
+    def create_dir(self, dir_path, permission=0o777):
+        """
+        Create dir with specified permission.
+        """
+        if (not os.path.exists(dir_path)) or (not os.path.isdir(dir_path)):
+            try:
+                debug_print('[COMMAND] mkdir ' + str(dir_path), debug_level_list=[2, 3])
+                os.makedirs(dir_path)
+                debug_print('[COMMAND] chmod ' + oct(permission)[2:] + ' ' + str(dir_path), debug_level_list=[2, 3])
+                os.chmod(dir_path, permission)
+            except Exception:
+                debug_print('[WARNING] *Warning*: Failed on creating directory ' + str(dir_path) + ' with permission "' + oct(permission)[2:] + '".', debug_level_list=[1, 2, 3])
+
+    def get_system_rm(self):
+        """
+        Get system rm command from ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm'], which is "application/x-executable" file type.
+        """
+        if (not self.system_rm) or (not os.path.exists(self.system_rm)):
+            rm_path_list = ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm']
+
+            for rm_path in rm_path_list:
+                result = subprocess.check_output(['/bin/file', '--mime', rm_path]).decode('utf-8')
+
+                if 'application/x-executable' in result:
+                    self.system_rm = rm_path
+                    break
+
+    def save_log(self, message, message_level='Info'):
+        """
+        Save message into user log file.
+        """
+        if self.log_mode and (USER not in self.log_ignore_user_list):
+            log_user_dir = str(self.log_dir) + '/' + str(USER)
+            self.create_dir(log_user_dir, permission=0o777)
+            log_file = str(log_user_dir) + '/' + str(CURRENT_DATE)
+
+            try:
+                with open(log_file, 'a') as LF:
+                    if ('SAFE_RM_DEBUG' in os.environ) and (os.environ['SAFE_RM_DEBUG'] == '4'):
+                        message = str(message) + '  (Virtual Operation)'
+
+                    log_dic = {"time": CURRENT_TIME, "message_level": message_level, "user": USER, "login_user": LOGIN_USER, "host": HOSTNAME, "cwd": CWD, "message": message}
+                    LF.write(str(json.dumps(log_dic, ensure_ascii=False)) + '\n')
+            except Exception:
+                debug_print('[WARNING] *Warning*: Failed on saving message into log file "' + str(log_file) + '".', debug_level_list=[1, 2, 3])
+
+    def parse_rm_command(self):
+        """
+        Get arguments and paths from rm command.
+        """
+        rm_arguments = ''
+        remove_path_list = []
+
+        for arg in sys.argv[1:]:
+            if re.match(r'^-.+$', arg):
+                if rm_arguments:
+                    rm_arguments += ' ' + str(arg)
+                else:
+                    rm_arguments = str(arg)
+            elif arg:
+                remove_path_list.append(arg)
+
+        return rm_arguments, remove_path_list
+
+    def check_protection(self, remove_path, command):
+        """
+        Check the remove_path is protected or not.
+        """
+        if os.path.exists(remove_path):
+            absolute_remove_path = os.path.abspath(remove_path)
+
+            for protected_path in self.protected_path_list:
+                if re.match(r'^' + str(absolute_remove_path) + '(/.*)?$', protected_path):
+                    if absolute_remove_path == protected_path:
+                        print_warning('*Warning*: cannot remove protected path "' + str(remove_path) + '", skip!')
+                        self.save_log('*Warning*: cannot remove protected path "' + str(remove_path) + '", skip!', message_level='Warning')
+                    else:
+                        print_warning('*Warning*: cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!')
+                        self.save_log('*Warning*: cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!', message_level='Warning')
+
+                    if USER == LOGIN_USER:
+                        self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (skip)')
+                    else:
+                        self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '(' + str(LOGIN_USER) + ')\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (skip)')
+
+                    return True
+
+        return False
+
+    def send_alarm(self, title='', message='', user=''):
+        """
+        Send alarm message with self.alarm_command.
+        """
+        if self.alarm_command and (USER not in self.alarm_ignore_user_list):
+            if title:
+                alarm_command = re.sub(r'<TITLE>', title, self.alarm_command)
+
+            if message:
+                alarm_command = re.sub(r'<MESSAGE>', message, self.alarm_command)
+
+            if user:
+                alarm_command = re.sub(r'<USER>', user, self.alarm_command)
+
+            debug_print('[COMMAND] ' + str(alarm_command), debug_level_list=[2, 3])
+            self.save_log('[alarm_command=' + str(alarm_command) + ']', message_level='Info')
+            os.system(alarm_command)
+
+    def move_to_recycle(self, remove_path):
+        """
+        Move remove_path into user_recycle_bin_dir.
+        """
+        # Check if remove_path is already defined in self.recycle_path_list.
+        absolute_remove_path = os.path.abspath(remove_path)
+        recycle_match = False
+
+        for recycle_path in self.recycle_path_list:
+            if re.match(r'^' + str(absolute_remove_path) + '(/.*)?$', recycle_path):
+                recycle_match = True
+                break
+
+        if not recycle_match:
+            return
+
+        # Generate user_recycle_bin_dir.
+        user_recycle_bin_dir = str(self.recycle_bin_dir) + '/' + str(USER)
+        self.create_dir(user_recycle_bin_dir, permission=0o777)
+
+        # Move remove_path into user_recycle_bin_dir.
+        remove_path_name = os.path.basename(remove_path)
+        target_path = str(user_recycle_bin_dir) + '/' + str(remove_path_name)
+
+        if os.path.exists(target_path):
+            current_time = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+            recycle_command = '/bin/mv -f ' + str(remove_path) + ' ' + str(target_path) + '.' + str(current_time)
+        else:
+            recycle_command = '/bin/mv -f ' + str(remove_path) + ' ' + str(target_path)
+
+        debug_print('[COMMAND] ' + str(recycle_command), debug_level_list=[2, 3])
+        self.save_log('[recycle_command=' + str(recycle_command) + ']', message_level='Info')
+
+        if ('SAFE_RM_DEBUG' not in os.environ) or (os.environ['SAFE_RM_DEBUG'] != '4'):
+            os.system(recycle_command)
+
+    def run(self):
+        """
+        Main function.
+        """
+        command = ' '.join(sys.argv)
+        self.save_log('[command=' + str(command) + ']', message_level='Info')
+
+        if not self.system_rm:
+            print_warning('*Warning*: Not find system rm command, skip!')
+            self.save_log('*Warning*: Not find system rm command, skip!', message_level='Warning')
+        else:
+            (rm_arguments, remove_path_list) = self.parse_rm_command()
+
+            if not remove_path_list:
+                command = str(self.system_rm) + ' ' + str(rm_arguments)
+                os.system(command)
+            else:
+                for remove_path in remove_path_list:
+                    if rm_arguments:
+                        command = str(self.system_rm) + ' ' + str(rm_arguments) + ' ' + str(remove_path)
+                    else:
+                        command = str(self.system_rm) + ' ' + str(remove_path)
+
+                    if not self.check_protection(remove_path, command):
+                        # Execute recycle mode.
+                        if self.recycle_mode and self.recycle_bin_dir and os.path.exists(self.recycle_bin_dir) and self.recycle_path_list:
+                            self.move_to_recycle(remove_path)
+
+                        # Execute remove.
+                        if ('SAFE_RM_DEBUG' not in os.environ) or (os.environ['SAFE_RM_DEBUG'] != '4'):
+                            debug_print('[COMMAND] ' + str(command), debug_level_list=[2, 3])
+                            os.system(command)
+
+
+################
+# Main Process #
+################
+def main():
+    my_safe_rm = SafeRm()
+    my_safe_rm.run()
+
+
+if __name__ == '__main__':
+    main()

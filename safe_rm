@@ -93,7 +93,7 @@ class SafeRm():
         # [Editable] self.recycle_bin_dir : specify the recycle bin path (will create self.recycle_bin_dir/<USER> for current user).
         # [Editable] self.recycle_path_list : specify recycle paths (absolute path), the following files will be moved to the recycle bin when they are deleted, globally effective.
         self.recycle_mode = True
-        self.recycle_bin_dir = '/ic/software/cad_data/it/safe_rm/recycle_bin'
+        self.recycle_bin_dir = ''
         self.recycle_path_list = [
             '~/.alias',
             '~/.bash_history',
@@ -117,7 +117,7 @@ class SafeRm():
         # [Editable] self.log_dir : where to save log file, make sure permission is "777".
         self.log_mode = True
         self.log_ignore_user_list = []
-        self.log_dir = '/ic/software/cad_data/it/safe_rm/log'
+        self.log_dir = ''
 
         if self.log_mode:
             if (not self.log_dir) or (not os.path.exists(self.log_dir)):
@@ -128,7 +128,7 @@ class SafeRm():
 
         # [Editable] self.alarm_command : specify alarm command. ("<TITAL>", "<MESSAGE>" and "<USER>" are replaceable string.")
         # [Editable] self.alarm_ignore_user_list : specify a user list, no alarms will be sent fro deletion operations of users in the list.
-        self.alarm_command = '/ic/software/cad_tools/bin/send_lark -T "Security Alarm: high risk deletion" -c "<MESSAGE>" -r liyanqing.1987'
+        self.alarm_command = ''
         self.alarm_ignore_user_list = []
         debug_print('[CONFIG] alarm_command : ' + str(self.alarm_command), debug_level_list=[3, ])
 

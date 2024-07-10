@@ -15,7 +15,6 @@
 1.  use as alias    
 
      `[user@host ~]# alias rm=“/***/safe_rm“`    
-     `[user@host ~]# rm ***`    
      
      ![use as alias](alias_demo.gif)    
 

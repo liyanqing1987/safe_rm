@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.0 (2024-07-08)
+# Version     : V1.0 (2024-09-23)
 ################################
 import os
 import re
@@ -86,7 +86,11 @@ class SafeRm():
             '/usr',
             '/var']
 
-        self.protected_path_list = self.extend_list_with_config(self.protected_path_list, ['/etc/safe_rm.protected', str(os.environ['HOME']) + '/.config/safe_rm.protected'])
+        if 'HOME' in os.environ:
+            self.protected_path_list = self.extend_list_with_config(self.protected_path_list, ['/etc/safe_rm.protected', str(os.environ['HOME']) + '/.config/safe_rm.protected'])
+        else:
+            self.protected_path_list = self.extend_list_with_config(self.protected_path_list, ['/etc/safe_rm.protected',])
+
         debug_print('[CONFIG] protected_path_list : ' + str(self.protected_path_list), debug_level_list=[3, ])
 
         # [Editable] self.recycle_mode : enable recycle bin mechnism, move the data to be deleted to the recycle bin.
@@ -106,7 +110,10 @@ class SafeRm():
                 self.recycle_bin_dir = '/tmp/safe_rm/recycle_bin'
                 self.create_dir(self.recycle_bin_dir, permission=0o777)
 
-            self.recycle_path_list = self.extend_list_with_config(self.recycle_path_list, ['/etc/safe_rm.recycle', str(os.environ['HOME']) + '/.config/safe_rm.recycle'])
+            if 'HOME' in os.environ:
+                self.recycle_path_list = self.extend_list_with_config(self.recycle_path_list, ['/etc/safe_rm.recycle', str(os.environ['HOME']) + '/.config/safe_rm.recycle'])
+            else:
+                self.recycle_path_list = self.extend_list_with_config(self.recycle_path_list, ['/etc/safe_rm.recycle',])
 
         debug_print('[CONFIG] recycle_mode : ' + str(self.recycle_mode), debug_level_list=[3, ])
         debug_print('[CONFIG] recycle_dir : ' + str(self.recycle_bin_dir), debug_level_list=[3, ])
@@ -159,7 +166,7 @@ class SafeRm():
         for path_item in copy_path_list:
             path_item = path_item.strip()
 
-            if re.match(r'^~.*$', path_item):
+            if re.match(r'^~.*$', path_item) and ('HOME' in os.environ):
                 path_item = re.sub(r'~', os.environ['HOME'], path_item)
 
             if re.search(r'\*', path_item):
@@ -201,7 +208,7 @@ class SafeRm():
             for rm_path in rm_path_list:
                 result = subprocess.check_output(['/bin/file', '--mime', rm_path]).decode('utf-8')
 
-                if 'application/x-executable' in result:
+                if ('application/x-executable; charset=binary' in result) or ('application/x-sharedlib; charset=binary' in result):
                     self.system_rm = rm_path
                     break
 

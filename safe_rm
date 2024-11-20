@@ -1,4 +1,4 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 ################################
 # File Name   : safe_rm
@@ -200,15 +200,15 @@ class SafeRm():
 
     def get_system_rm(self):
         """
-        Get system rm command from ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm'], which is "application/x-executable" file type.
+        Get system rm command from ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm'], which is "application/x-executable" or "application/x-sharedlib" file type.
         """
         if (not self.system_rm) or (not os.path.exists(self.system_rm)):
             rm_path_list = ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm']
 
             for rm_path in rm_path_list:
-                result = subprocess.check_output(['/bin/file', '--mime', rm_path]).decode('utf-8')
+                result = subprocess.check_output(['/usr/bin/file', '--mime', rm_path]).decode('utf-8')
 
-                if ('application/x-executable; charset=binary' in result) or ('application/x-sharedlib; charset=binary' in result):
+                if ('application/x-executable; charset=binary' in result) or ('application/x-sharedlib; charset=binary' in result) or ('application/x-mach-binary; charset=binary' in result):
                     self.system_rm = rm_path
                     break
 
@@ -231,6 +231,17 @@ class SafeRm():
             except Exception:
                 debug_print('[WARNING] *Warning*: Failed on saving message into log file "' + str(log_file) + '".', debug_level_list=[1, 2, 3])
 
+    def convert_to_raw_string(self, input_string):
+        raw_string = ""
+
+        for char in input_string:
+            if char in ['\a', '\b', '\f', '\n', '\r', '\t', '\v', '\'', '\"', '\\', r'(', r')', r' ']:
+                raw_string += '\\' + char
+            else:
+                raw_string += char
+
+        return raw_string
+
     def parse_rm_command(self):
         """
         Get arguments and paths from rm command.
@@ -239,6 +250,8 @@ class SafeRm():
         remove_path_list = []
 
         for arg in sys.argv[1:]:
+            arg = self.convert_to_raw_string(arg)
+
             if re.match(r'^-.+$', arg):
                 if rm_arguments:
                     rm_arguments += ' ' + str(arg)

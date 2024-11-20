@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.0 (2024-09-23)
+# Version     : V1.0 (2024-11-20)
 ################################
 import os
 import re

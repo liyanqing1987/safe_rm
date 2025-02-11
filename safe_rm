@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.0 (2024-11-20)
+# Version     : V1.1 (2025-02-10)
 ################################
 import os
 import re
@@ -93,6 +93,18 @@ class SafeRm():
 
         debug_print('[CONFIG] protected_path_list : ' + str(self.protected_path_list), debug_level_list=[3, ])
 
+        # [Editable] self.honeypot_path_list : specify honeypot paths (file name or absolute path), globally effective.
+        self.honeypot_path_list = [
+            '.honeypot',
+            'honeypot']
+
+        if 'HOME' in os.environ:
+            self.honeypot_path_list = self.extend_list_with_config(self.honeypot_path_list, ['/etc/safe_rm.honeypot', str(os.environ['HOME']) + '/.config/safe_rm.honeypot'], check_exists=False)
+        else:
+            self.honeypot_path_list = self.extend_list_with_config(self.honeypot_path_list, ['/etc/safe_rm.honeypot',], check_exists=False)
+
+        debug_print('[CONFIG] honeypot_path_list : ' + str(self.honeypot_path_list), debug_level_list=[3, ])
+
         # [Editable] self.recycle_mode : enable recycle bin mechnism, move the data to be deleted to the recycle bin.
         # [Editable] self.recycle_bin_dir : specify the recycle bin path (will create self.recycle_bin_dir/<USER> for current user).
         # [Editable] self.recycle_path_list : specify recycle paths (absolute path), the following files will be moved to the recycle bin when they are deleted, globally effective.
@@ -108,7 +120,7 @@ class SafeRm():
         if self.recycle_mode:
             if (not self.recycle_bin_dir) or (not os.path.exists(self.recycle_bin_dir)):
                 self.recycle_bin_dir = '/tmp/safe_rm/recycle_bin'
-                self.create_dir(self.recycle_bin_dir, permission=0o777)
+                self.create_dir(self.recycle_bin_dir, permission=0o1777)
 
             if 'HOME' in os.environ:
                 self.recycle_path_list = self.extend_list_with_config(self.recycle_path_list, ['/etc/safe_rm.recycle', str(os.environ['HOME']) + '/.config/safe_rm.recycle'])
@@ -121,17 +133,17 @@ class SafeRm():
 
         # [Editable] self.log_mode : enable the behavior of saving logs.
         # [Editable] self.log_ignore_user_list : specify a user list, will not save logs fro deletion operations of users in the list.
-        # [Editable] self.log_dir : where to save log file, make sure permission is "777".
+        # [Editable] self.log_dir_list : Specify log dir(s) to save log file, make sure permission is "1777".
         self.log_mode = True
         self.log_ignore_user_list = []
-        self.log_dir = ''
+        self.log_dir_list = ['/tmp/safe_rm/log']
 
         if self.log_mode:
-            if (not self.log_dir) or (not os.path.exists(self.log_dir)):
-                self.log_dir = '/tmp/safe_rm/log'
-                self.create_dir(self.log_dir, permission=0o777)
+            for log_dir in self.log_dir_list:
+                if not os.path.exists(log_dir):
+                    self.create_dir(log_dir, permission=0o1777)
 
-        debug_print('[CONFIG] log_dir : ' + str(self.log_dir), debug_level_list=[3, ])
+        debug_print('[CONFIG] log_dir(s) : ' + str(self.log_dir_list), debug_level_list=[3, ])
 
         # [Editable] self.alarm_command : specify alarm command. ("<TITAL>", "<MESSAGE>" and "<USER>" are replaceable string.")
         # [Editable] self.alarm_ignore_user_list : specify a user list, no alarms will be sent fro deletion operations of users in the list.
@@ -139,12 +151,12 @@ class SafeRm():
         self.alarm_ignore_user_list = []
         debug_print('[CONFIG] alarm_command : ' + str(self.alarm_command), debug_level_list=[3, ])
 
-        # [Editable] self.system_rm : specify system rm path, will choice one from ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm'] by default.
+        # [Editable] self.system_rm : specify system rm.
         self.system_rm = ''
         self.get_system_rm()
         debug_print('[CONFIG] system_rm : ' + str(self.system_rm), debug_level_list=[3, ])
 
-    def extend_list_with_config(self, path_list, config_file_list):
+    def extend_list_with_config(self, path_list, config_file_list, check_exists=True):
         """
         Extend path_list with config_file(s) on config_file_list.
         """
@@ -176,16 +188,19 @@ class SafeRm():
 
         tmp_path_list = sorted(list(set(tmp_path_list)))
 
-        # Get new_path_list with existing path_item.
-        new_path_list = []
+        if not check_exists:
+            return tmp_path_list
+        else:
+            # Get new_path_list with existing path_item.
+            new_path_list = []
 
-        for path_item in tmp_path_list:
-            if os.path.exists(path_item):
-                new_path_list.append(path_item)
+            for path_item in tmp_path_list:
+                if os.path.exists(path_item):
+                    new_path_list.append(path_item)
 
-        return new_path_list
+            return new_path_list
 
-    def create_dir(self, dir_path, permission=0o777):
+    def create_dir(self, dir_path, permission=0o1777):
         """
         Create dir with specified permission.
         """
@@ -200,36 +215,41 @@ class SafeRm():
 
     def get_system_rm(self):
         """
-        Get system rm command from ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm'], which is "application/x-executable" or "application/x-sharedlib" file type.
+        Get real system rm is self.system_rm is not specified.
         """
         if (not self.system_rm) or (not os.path.exists(self.system_rm)):
-            rm_path_list = ['/bin/rm', '/usr/bin/rm', '/usr/local/bin/rm', '/bin/system_rm', '/usr/bin/system_rm', '/usr/local/bin/system_rm']
+            current_script_path = os.path.abspath(__file__)
+            system_rm_list = ['/usr/bin/system_rm', '/bin/system_rm', '/usr/bin/rm', '/bin/rm']
 
-            for rm_path in rm_path_list:
-                result = subprocess.check_output(['/usr/bin/file', '--mime', rm_path]).decode('utf-8')
+            for system_rm in system_rm_list:
+                real_system_rm = os.path.realpath(system_rm)
 
-                if ('application/x-executable; charset=binary' in result) or ('application/x-sharedlib; charset=binary' in result) or ('application/x-mach-binary; charset=binary' in result):
-                    self.system_rm = rm_path
-                    break
+                if real_system_rm != current_script_path:
+                    result = subprocess.check_output(['/usr/bin/file', '--mime', real_system_rm]).decode('utf-8')
+
+                    if ('application/x-executable; charset=binary' in result) or ('application/x-sharedlib; charset=binary' in result) or ('application/x-mach-binary; charset=binary' in result):
+                        self.system_rm = real_system_rm
+                        break
 
     def save_log(self, message, message_level='Info'):
         """
         Save message into user log file.
         """
         if self.log_mode and (USER not in self.log_ignore_user_list):
-            log_user_dir = str(self.log_dir) + '/' + str(USER)
-            self.create_dir(log_user_dir, permission=0o777)
-            log_file = str(log_user_dir) + '/' + str(CURRENT_DATE)
+            for log_dir in self.log_dir_list:
+                log_user_dir = str(log_dir) + '/' + str(USER)
+                self.create_dir(log_user_dir, permission=0o700)
+                log_file = str(log_user_dir) + '/' + str(CURRENT_DATE)
 
-            try:
-                with open(log_file, 'a') as LF:
-                    if ('SAFE_RM_DEBUG' in os.environ) and (os.environ['SAFE_RM_DEBUG'] == '4'):
-                        message = str(message) + '  (Virtual Operation)'
+                try:
+                    with open(log_file, 'a') as LF:
+                        if ('SAFE_RM_DEBUG' in os.environ) and (os.environ['SAFE_RM_DEBUG'] == '4'):
+                            message = str(message) + '  (Virtual Operation)'
 
-                    log_dic = {"time": CURRENT_TIME, "message_level": message_level, "user": USER, "login_user": LOGIN_USER, "host": HOSTNAME, "cwd": CWD, "message": message}
-                    LF.write(str(json.dumps(log_dic, ensure_ascii=False)) + '\n')
-            except Exception:
-                debug_print('[WARNING] *Warning*: Failed on saving message into log file "' + str(log_file) + '".', debug_level_list=[1, 2, 3])
+                        log_dic = {"time": CURRENT_TIME, "message_level": message_level, "user": USER, "login_user": LOGIN_USER, "host": HOSTNAME, "cwd": CWD, "message": message}
+                        LF.write(str(json.dumps(log_dic, ensure_ascii=False)) + '\n')
+                except Exception:
+                    debug_print('[WARNING] *Warning*: Failed on saving message into log file "' + str(log_file) + '".', debug_level_list=[1, 2, 3])
 
     def convert_to_raw_string(self, input_string):
         raw_string = ""
@@ -287,6 +307,24 @@ class SafeRm():
 
         return False
 
+    def check_honeypot(self, remove_path, command):
+        """
+        Check the remove_path is honeypot or not.
+        """
+        if os.path.exists(remove_path):
+            absolute_remove_path = os.path.abspath(remove_path)
+
+            for honeypot_path in self.honeypot_path_list:
+                absolute_remove_path_honeypot_path = str(absolute_remove_path) + '/' + str(honeypot_path)
+
+                if (absolute_remove_path == honeypot_path) or re.match(r'^.*/' + str(honeypot_path) + '$', absolute_remove_path) or os.path.exists(absolute_remove_path_honeypot_path):
+                    self.save_log('*Warning*: try to remove honeypot path "' + str(absolute_remove_path) + '", notice!', message_level='Warning')
+
+                    if USER == LOGIN_USER:
+                        self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (honeypot)')
+                    else:
+                        self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '(' + str(LOGIN_USER) + ')\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (honeypot)')
+
     def send_alarm(self, title='', message='', user=''):
         """
         Send alarm message with self.alarm_command.
@@ -303,7 +341,7 @@ class SafeRm():
 
             debug_print('[COMMAND] ' + str(alarm_command), debug_level_list=[2, 3])
             self.save_log('[alarm_command=' + str(alarm_command) + ']', message_level='Info')
-            os.system(alarm_command)
+            subprocess.Popen(alarm_command, shell=True)
 
     def move_to_recycle(self, remove_path):
         """
@@ -323,7 +361,7 @@ class SafeRm():
 
         # Generate user_recycle_bin_dir.
         user_recycle_bin_dir = str(self.recycle_bin_dir) + '/' + str(USER)
-        self.create_dir(user_recycle_bin_dir, permission=0o777)
+        self.create_dir(user_recycle_bin_dir, permission=0o700)
 
         # Move remove_path into user_recycle_bin_dir.
         remove_path_name = os.path.basename(remove_path)
@@ -365,6 +403,9 @@ class SafeRm():
                         command = str(self.system_rm) + ' ' + str(remove_path)
 
                     if not self.check_protection(remove_path, command):
+                        # Check honeypot.
+                        self.check_honeypot(remove_path, command)
+
                         # Execute recycle mode.
                         if self.recycle_mode and self.recycle_bin_dir and os.path.exists(self.recycle_bin_dir) and self.recycle_path_list:
                             self.move_to_recycle(remove_path)

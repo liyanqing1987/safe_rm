@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.1 (2025-02-10)
+# Version     : V1.2 (2025-03-03)
 ################################
 import os
 import re
@@ -14,10 +14,12 @@ import copy
 import glob
 import json
 import socket
+import shutil
 import datetime
 import subprocess
 
 os.environ['PYTHONUNBUFFERED'] = '1'
+CURRENT_SCRIPT = sys.argv[0]
 CWD = os.getcwd()
 HOSTNAME = socket.gethostname()
 CURRENT_DATE = datetime.datetime.now().strftime('%Y%m%d')
@@ -42,7 +44,7 @@ def debug_print(message, debug_level_list=[1, ]):
     debug_level_list.append(4)
 
     if ('SAFE_RM_DEBUG' in os.environ) and re.match(r'^[1234]$', os.environ['SAFE_RM_DEBUG']) and (int(os.environ['SAFE_RM_DEBUG']) in debug_level_list):
-        print(message)
+        print('\033[1;34m' + str(message) + '\033[0m')
 
 
 def print_warning(message):
@@ -112,7 +114,6 @@ class SafeRm():
         self.recycle_bin_dir = ''
         self.recycle_path_list = [
             '~/.alias',
-            '~/.bash_history',
             '~/.bashrc',
             '~/.config',
             '~/.ssh']
@@ -153,8 +154,38 @@ class SafeRm():
 
         # [Editable] self.system_rm : specify system rm.
         self.system_rm = ''
-        self.get_system_rm()
+
+        if not self.system_rm:
+            self.get_system_rm()
+
         debug_print('[CONFIG] system_rm : ' + str(self.system_rm), debug_level_list=[3, ])
+
+        if not self.system_rm:
+            debug_print('[WARNING] No system rm is specified.', debug_level_list=[1, 2, 3])
+        elif not os.path.exists(self.system_rm):
+            debug_print('[WARNING] Specified system rm "' + str(self.system_rm) + '" is missing.', debug_level_list=[1, 2, 3])
+
+    def run_command(self, command, mystdin=subprocess.PIPE, mystdout=subprocess.PIPE, mystderr=subprocess.PIPE, show=False):
+        """
+        Run system command with subprocess.Popen, get returncode/stdout/stderr.
+        """
+        SP = subprocess.Popen(command, shell=True, stdin=mystdin, stdout=mystdout, stderr=mystderr)
+        (stdout, stderr) = SP.communicate()
+        stdout = str(stdout, 'utf-8').strip()
+        stderr = str(stderr, 'utf-8').strip()
+
+        if self.system_rm and os.path.exists(self.system_rm):
+            stdout = re.sub(self.system_rm, CURRENT_SCRIPT, stdout)
+            stderr = re.sub(self.system_rm, CURRENT_SCRIPT, stderr)
+
+        if show:
+            if stdout:
+                print(stdout)
+
+            if stderr:
+                print(stderr)
+
+        return (SP.returncode, stdout, stderr)
 
     def extend_list_with_config(self, path_list, config_file_list, check_exists=True):
         """
@@ -169,7 +200,7 @@ class SafeRm():
                             if (not re.match(r'^\s*$', line)) and (not re.match(r'^\s*#.*$', line)):
                                 path_list.append(line)
                 except Exception:
-                    debug_print('[WARNING] *Warning*: Failed on opening config file ' + str(config_file) + ' for read.', debug_level_list=[1, 2, 3])
+                    debug_print('[WARNING] Failed on opening config file ' + str(config_file) + ' for read.', debug_level_list=[1, 2, 3])
 
         # Process for "~" and "*".
         copy_path_list = copy.deepcopy(path_list)
@@ -211,25 +242,25 @@ class SafeRm():
                 debug_print('[COMMAND] chmod ' + oct(permission)[2:] + ' ' + str(dir_path), debug_level_list=[2, 3])
                 os.chmod(dir_path, permission)
             except Exception:
-                debug_print('[WARNING] *Warning*: Failed on creating directory ' + str(dir_path) + ' with permission "' + oct(permission)[2:] + '".', debug_level_list=[1, 2, 3])
+                debug_print('[WARNING] Failed on creating directory ' + str(dir_path) + ' with permission "' + oct(permission)[2:] + '".', debug_level_list=[1, 2, 3])
 
     def get_system_rm(self):
         """
         Get real system rm is self.system_rm is not specified.
         """
-        if (not self.system_rm) or (not os.path.exists(self.system_rm)):
-            current_script_path = os.path.abspath(__file__)
-            system_rm_list = ['/usr/bin/system_rm', '/bin/system_rm', '/usr/bin/rm', '/bin/rm']
+        real_current_script = os.path.realpath(CURRENT_SCRIPT)
+        system_rm_list = ['/usr/bin/system_rm', '/usr/bin/rm', '/bin/system_rm', '/bin/rm']
 
-            for system_rm in system_rm_list:
-                real_system_rm = os.path.realpath(system_rm)
+        for system_rm in system_rm_list:
+            real_system_rm = os.path.realpath(system_rm)
 
-                if real_system_rm != current_script_path:
-                    result = subprocess.check_output(['/usr/bin/file', '--mime', real_system_rm]).decode('utf-8')
+            if real_system_rm != real_current_script:
+                command = '/usr/bin/file --mime ' + str(real_system_rm)
+                (return_code, stdout, stderr) = self.run_command(command)
 
-                    if ('application/x-executable; charset=binary' in result) or ('application/x-sharedlib; charset=binary' in result) or ('application/x-mach-binary; charset=binary' in result):
-                        self.system_rm = real_system_rm
-                        break
+                if ('application/x-executable; charset=binary' in stdout) or ('application/x-sharedlib; charset=binary' in stdout) or ('application/x-mach-binary; charset=binary' in stdout):
+                    self.system_rm = real_system_rm
+                    break
 
     def save_log(self, message, message_level='Info'):
         """
@@ -249,7 +280,7 @@ class SafeRm():
                         log_dic = {"time": CURRENT_TIME, "message_level": message_level, "user": USER, "login_user": LOGIN_USER, "host": HOSTNAME, "cwd": CWD, "message": message}
                         LF.write(str(json.dumps(log_dic, ensure_ascii=False)) + '\n')
                 except Exception:
-                    debug_print('[WARNING] *Warning*: Failed on saving message into log file "' + str(log_file) + '".', debug_level_list=[1, 2, 3])
+                    debug_print('[WARNING] Failed on saving message into log file "' + str(log_file) + '".', debug_level_list=[1, 2, 3])
 
     def convert_to_raw_string(self, input_string):
         raw_string = ""
@@ -266,6 +297,7 @@ class SafeRm():
         """
         Get arguments and paths from rm command.
         """
+        rm_command = ' '.join(sys.argv)
         rm_arguments = ''
         remove_path_list = []
 
@@ -280,7 +312,7 @@ class SafeRm():
             elif arg:
                 remove_path_list.append(arg)
 
-        return rm_arguments, remove_path_list
+        return rm_command, rm_arguments, remove_path_list
 
     def check_protection(self, remove_path, command):
         """
@@ -292,11 +324,11 @@ class SafeRm():
             for protected_path in self.protected_path_list:
                 if re.match(r'^' + str(absolute_remove_path) + '(/.*)?$', protected_path):
                     if absolute_remove_path == protected_path:
-                        print_warning('*Warning*: cannot remove protected path "' + str(remove_path) + '", skip!')
-                        self.save_log('*Warning*: cannot remove protected path "' + str(remove_path) + '", skip!', message_level='Warning')
+                        print_warning('*Warning*: Cannot remove protected path "' + str(remove_path) + '", skip!')
+                        self.save_log('*Warning*: Cannot remove protected path "' + str(remove_path) + '", skip!', message_level='Warning')
                     else:
-                        print_warning('*Warning*: cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!')
-                        self.save_log('*Warning*: cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!', message_level='Warning')
+                        print_warning('*Warning*: Cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!')
+                        self.save_log('*Warning*: Cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!', message_level='Warning')
 
                     if USER == LOGIN_USER:
                         self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (skip)')
@@ -318,7 +350,7 @@ class SafeRm():
                 absolute_remove_path_honeypot_path = str(absolute_remove_path) + '/' + str(honeypot_path)
 
                 if (absolute_remove_path == honeypot_path) or re.match(r'^.*/' + str(honeypot_path) + '$', absolute_remove_path) or os.path.exists(absolute_remove_path_honeypot_path):
-                    self.save_log('*Warning*: try to remove honeypot path "' + str(absolute_remove_path) + '", notice!', message_level='Warning')
+                    self.save_log('*Warning*: Honeypot data "' + str(absolute_remove_path) + '" is removed, notice!', message_level='Warning')
 
                     if USER == LOGIN_USER:
                         self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (honeypot)')
@@ -369,51 +401,75 @@ class SafeRm():
 
         if os.path.exists(target_path):
             current_time = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-            recycle_command = '/bin/mv -f ' + str(remove_path) + ' ' + str(target_path) + '.' + str(current_time)
+            recycle_command = '/bin/cp -f ' + str(remove_path) + ' ' + str(target_path) + '.' + str(current_time)
         else:
-            recycle_command = '/bin/mv -f ' + str(remove_path) + ' ' + str(target_path)
+            recycle_command = '/bin/cp -f ' + str(remove_path) + ' ' + str(target_path)
 
         debug_print('[COMMAND] ' + str(recycle_command), debug_level_list=[2, 3])
         self.save_log('[recycle_command=' + str(recycle_command) + ']', message_level='Info')
 
         if ('SAFE_RM_DEBUG' not in os.environ) or (os.environ['SAFE_RM_DEBUG'] != '4'):
-            os.system(recycle_command)
+            self.run_command(recycle_command)
+
+    def rm(self, remove_path):
+        """
+        Remove remove_path with python function os.remove() and shutil.retree().
+        """
+        if os.path.exists(remove_path):
+            if os.path.isfile(remove_path) or os.path.islink(remove_path):
+                try:
+                    os.remove(remove_path)
+                except PermissionError:
+                    print(f'rm: cannot remove "{remove_path}": Permission denied.')
+                except Exception as err:
+                    print(f'rm: failed on removing "{remove_path}": {err}')
+            elif os.path.isdir(remove_path):
+                try:
+                    shutil.rmtree(remove_path)
+                except PermissionError:
+                    print(f'rm: cannot remove "{remove_path}": Permission denied.')
+                except Exception as err:
+                    print(f'rm: failed on removing "{remove_path}": {err}')
 
     def run(self):
         """
         Main function.
         """
-        command = ' '.join(sys.argv)
-        self.save_log('[command=' + str(command) + ']', message_level='Info')
+        (rm_command, rm_arguments, remove_path_list) = self.parse_rm_command()
+        self.save_log('[command=' + str(rm_command) + ']', message_level='Info')
 
-        if not self.system_rm:
-            print_warning('*Warning*: Not find system rm command, skip!')
-            self.save_log('*Warning*: Not find system rm command, skip!', message_level='Warning')
-        else:
-            (rm_arguments, remove_path_list) = self.parse_rm_command()
-
-            if not remove_path_list:
+        if (not rm_arguments) and (not remove_path_list):
+            print("rm: missing operand\nTry 'rm --help' for more information.")
+        elif rm_arguments and (not remove_path_list):
+            if self.system_rm and os.path.exists(self.system_rm):
                 command = str(self.system_rm) + ' ' + str(rm_arguments)
-                os.system(command)
-            else:
-                for remove_path in remove_path_list:
-                    if rm_arguments:
-                        command = str(self.system_rm) + ' ' + str(rm_arguments) + ' ' + str(remove_path)
-                    else:
-                        command = str(self.system_rm) + ' ' + str(remove_path)
+                self.run_command(command, show=True)
+        else:
+            for remove_path in remove_path_list:
+                if not self.check_protection(remove_path, rm_command):
+                    # Check honeypot.
+                    self.check_honeypot(remove_path, rm_command)
 
-                    if not self.check_protection(remove_path, command):
-                        # Check honeypot.
-                        self.check_honeypot(remove_path, command)
+                    # Execute recycle mode.
+                    if self.recycle_mode and self.recycle_bin_dir and os.path.exists(self.recycle_bin_dir) and self.recycle_path_list:
+                        self.move_to_recycle(remove_path)
 
-                        # Execute recycle mode.
-                        if self.recycle_mode and self.recycle_bin_dir and os.path.exists(self.recycle_bin_dir) and self.recycle_path_list:
-                            self.move_to_recycle(remove_path)
+                    # Execute remove.
+                    if self.system_rm and os.path.exists(self.system_rm):
+                        if rm_arguments:
+                            command = str(self.system_rm) + ' ' + str(rm_arguments) + ' ' + str(remove_path)
+                        else:
+                            command = str(self.system_rm) + ' ' + str(remove_path)
 
-                        # Execute remove.
+                        debug_print('[COMMAND] ' + str(command), debug_level_list=[2, 3])
+
                         if ('SAFE_RM_DEBUG' not in os.environ) or (os.environ['SAFE_RM_DEBUG'] != '4'):
-                            debug_print('[COMMAND] ' + str(command), debug_level_list=[2, 3])
-                            os.system(command)
+                            self.run_command(command, show=True)
+                    else:
+                        debug_print('[COMMAND] rm -rf ' + str(remove_path), debug_level_list=[2, 3])
+
+                        if ('SAFE_RM_DEBUG' not in os.environ) or (os.environ['SAFE_RM_DEBUG'] != '4'):
+                            self.rm(remove_path)
 
 
 ################

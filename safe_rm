@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.2 (2025-03-03)
+# Version     : V1.2 (2025-09-26)
 ################################
 import os
 import re
@@ -309,6 +309,8 @@ class SafeRm():
                     rm_arguments += ' ' + str(arg)
                 else:
                     rm_arguments = str(arg)
+            elif arg in ['.', '..']:
+                pass
             elif arg:
                 remove_path_list.append(arg)
 

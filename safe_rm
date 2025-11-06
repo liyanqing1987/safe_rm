@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.2 (2025-09-26)
+# Version     : V1.2 (2025-11-06)
 ################################
 import os
 import re
@@ -58,7 +58,7 @@ class SafeRm():
     """
     Build safe "rm" class with protection/recycle/log/alarm machanism.
     -----------
-    Protection: Protect path in self.protected_path_list from being deleted.
+    Protection: Prevent paths in self.protected_path_list from being deleted.
     Recycle: Move the data to be deleted to the recycle bin.
     Log: Save logs for all data deletion operations.
     Alarm: Alarm for deletion operation to protected data.

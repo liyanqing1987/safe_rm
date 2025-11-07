@@ -1,5 +1,5 @@
 **Author:** liyanqing1987@163.com    
-**Version:** V1.2 (2025.03.03)    
+**Version:** V1.2.1 (2025.11.07)    
     
 # What is “safe_rm”?
  

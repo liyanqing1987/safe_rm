@@ -5,7 +5,7 @@
 # Author      : liyanqing.1987
 # Created On  : 2024-04-21 21:28:47
 # Description : Safe "rm" script to replace linux "rm" command.
-# Version     : V1.2 (2025-11-06)
+# Version     : V1.2.1 (2025-11-07)
 ################################
 import os
 import re
@@ -302,7 +302,8 @@ class SafeRm():
         remove_path_list = []
 
         for arg in sys.argv[1:]:
-            arg = self.convert_to_raw_string(arg)
+            if self.system_rm and os.path.exists(self.system_rm):
+                arg = self.convert_to_raw_string(arg)
 
             if re.match(r'^-.+$', arg):
                 if rm_arguments:
@@ -329,8 +330,8 @@ class SafeRm():
                         print_warning('*Warning*: Cannot remove protected path "' + str(remove_path) + '", skip!')
                         self.save_log('*Warning*: Cannot remove protected path "' + str(remove_path) + '", skip!', message_level='Warning')
                     else:
-                        print_warning('*Warning*: Cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!')
-                        self.save_log('*Warning*: Cannot remove path "' + str(remove_path) + '", there are protected data under it, skip!', message_level='Warning')
+                        print_warning('*Warning*: Cannot remove path "' + str(remove_path) + '", there is protected data under it, skip!')
+                        self.save_log('*Warning*: Cannot remove path "' + str(remove_path) + '", there is protected data under it, skip!', message_level='Warning')
 
                     if USER == LOGIN_USER:
                         self.send_alarm(message='Time: ' + str(CURRENT_TIME) + '\n User: ' + str(USER) + '\n Host: ' + str(HOSTNAME) + '\n Cwd: ' + str(CWD) + '\n Command: ' + str(command) + '  (skip)')
@@ -417,19 +418,21 @@ class SafeRm():
         """
         Remove remove_path with python function os.remove() and shutil.retree().
         """
-        if os.path.exists(remove_path):
+        if not os.path.exists(remove_path):
+            print(f'rm: cannot remove "{remove_path}": No such file or directory')
+        else:
             if os.path.isfile(remove_path) or os.path.islink(remove_path):
                 try:
                     os.remove(remove_path)
                 except PermissionError:
-                    print(f'rm: cannot remove "{remove_path}": Permission denied.')
+                    print(f'rm: cannot remove "{remove_path}": Permission denied')
                 except Exception as err:
                     print(f'rm: failed on removing "{remove_path}": {err}')
             elif os.path.isdir(remove_path):
                 try:
                     shutil.rmtree(remove_path)
                 except PermissionError:
-                    print(f'rm: cannot remove "{remove_path}": Permission denied.')
+                    print(f'rm: cannot remove "{remove_path}": Permission denied')
                 except Exception as err:
                     print(f'rm: failed on removing "{remove_path}": {err}')
 
